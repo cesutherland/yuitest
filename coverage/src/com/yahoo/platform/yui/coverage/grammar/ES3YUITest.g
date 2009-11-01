@@ -38,7 +38,6 @@ The grammar was kept as close as possible to the grammar in the "A Grammar Summa
 
 */
 
-
 grammar ES3YUITest ;
 
 options
@@ -277,6 +276,13 @@ public Token nextToken()
 
 @parser::members
 {
+
+private boolean verboseMode = false;
+
+public void setVerboseMode(boolean newVerboseMode){
+    verboseMode = newVerboseMode;
+}
+
 private final boolean isLeftHandSideAssign(RuleReturnScope lhs, Object[] cached)
 {
 	if (cached[0] != null)
@@ -318,12 +324,17 @@ private final boolean isLeftHandSideAssign(RuleReturnScope lhs, Object[] cached)
 }
 
 @SuppressWarnings("unused")
-private final static String wrapInBraces(Token start, Token stop, TokenStream tokens) {
+
+private final String wrapInBraces(Token start, Token stop, TokenStream tokens) {
   if (start == null || stop == null) {    
     return null;
   }
   if ("{".equals(start.getText())) {
     return tokens.toString(start, stop);
+  }
+  
+  if (verboseMode){
+    System.err.println("\n[INFO] Adding braces around statement at line " + start.getLine());
   }
   return "{" + tokens.toString(start, stop) + "}";
 }
@@ -1201,6 +1212,9 @@ scope {
         if (instrument && !$statement::isBlock) {
            $program::executableLines.add($start.getLine());
         }
+	if (verboseMode){
+		System.err.println("\n[INFO] Instrumenting statement on line " + $start.getLine());
+	}
 }
 	: ({ $statement::isBlock = input.LA(1) == LBRACE }? block | statementTail)
 	  -> {instrument && !$statement::isBlock}? cover_line(src={$program::name}, code={$text},line={$start.getLine()})
@@ -1560,7 +1574,12 @@ scope {
 	}
 	$functionDeclaration::funcLine = $start.getLine();		
 }
-@after { $program::functions.add("\"" + $functionDeclaration::funcName + "(" + $start.getLine() + ")\""); }
+@after { 
+	$program::functions.add("\"" + $functionDeclaration::funcName + ":" + $start.getLine() + "\""); 
+  	if (verboseMode){
+    		System.err.println("\n[INFO] Instrumenting function " + $functionDeclaration::funcName + " on line " +  $start.getLine());
+  	}
+}
 
 	: FUNCTION name=Identifier {$functionDeclaration::funcName=$Identifier.text;} formalParameterList functionDeclarationBody
 	  -> {instrument}? cover_line(src={$program::name}, code={$text}, line={$start.getLine()})
@@ -1571,10 +1590,11 @@ functionExpression
 scope{
     String funcName;
     Integer funcLine;
+    Integer funcNum;
 }
 @init {
     $functionExpression::funcLine=$start.getLine();
-    $program::anonymousFunctionCount++;
+    $functionExpression::funcNum = ++$program::anonymousFunctionCount;
 }
 	: FUNCTION name=Identifier? { $functionExpression::funcName=$Identifier.text; } formalParameterList functionExpressionBody
 
@@ -1602,13 +1622,25 @@ functionExpressionBody
 functionExpressionBodyWithoutBraces
 @after { 
 	//favor the function expression's declared name, otherwise assign an anonymous function name
-	String tempName = ($functionExpression::funcName==null) ? "(anonymous " + $program::anonymousFunctionCount + ")" : $functionExpression::funcName;
-	$program::functions.add("\"" + tempName + "(" + $functionExpression::funcLine + ")\""); 
+	String tempName = ($functionExpression::funcName==null) ? "(anonymous " + $functionExpression::funcNum + ")" : $functionExpression::funcName;
+	$program::functions.add("\"" + tempName + ":" + $functionExpression::funcLine + "\""); 
+	
+	if (verboseMode){
+		if ($functionExpression::funcName!=null){
+			System.err.println("\n[INFO] Instrumenting function expression " + $functionExpression::funcName + " on line " + $functionExpression::funcLine);
+		} else {
+			System.err.println("\n[INFO] Instrumenting anonmyous function expression (tracked as 'anonymous " + $functionExpression::funcNum + "') on line " + $functionExpression::funcLine);
+		}
+	}	
+	
 }
 	: sourceElement sourceElement*
+	{
+	
+	}
 	//{ $program::functions += ",{name:\"" + $functionExpression::funcName + "\",line:" + $start.getLine() + ", anonId:" + $program::anonymousFunctionCount +"}"; }
 	-> {$functionExpression::funcName!=null}? cover_func(src={$program::name}, code={$text}, name={$functionExpression::funcName}, line={$functionExpression::funcLine})
-	-> cover_anon_func(src={$program::name}, code={$text}, num={$program::anonymousFunctionCount}, line={$functionExpression::funcLine})
+	-> cover_anon_func(src={$program::name}, code={$text}, num={$functionExpression::funcNum}, line={$functionExpression::funcLine})
 	;
 
 functionDeclarationBodyWithoutBraces
@@ -1623,7 +1655,7 @@ functionDeclarationBodyWithoutBraces
 program
 scope {
   java.util.List<Integer> executableLines;
-  java.util.List<String> functions;
+  java.util.List<String> functions;  
   int stopLine;
   String name;
   int anonymousFunctionCount;
@@ -1652,7 +1684,5 @@ options
 	: { input.LA(1) == FUNCTION }? functionDeclaration
 	| statement
 	;
-
-// $>
 
 // $>
